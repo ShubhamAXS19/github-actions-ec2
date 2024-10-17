@@ -10,22 +10,114 @@ jobs:
     
     steps:
     - uses: actions/checkout@v3
+      
+    - name: Start Deployment
+      run: |
+        echo "🚀 Starting deployment at $(date)"
+        echo "Branch: ${{ github.ref }}"
+        echo "Commit: ${{ github.sha }}"
     
     - name: Configure SSH
       run: |
+        echo "🔑 Setting up SSH configuration..."
         mkdir -p ~/.ssh/
         echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/private_key.pem
         chmod 600 ~/.ssh/private_key.pem
-        # Replace XX.XX.XX.XX with your EC2 IP
         ssh-keyscan -H 65.0.31.64 >> ~/.ssh/known_hosts
+        echo "✅ SSH configured successfully"
     
     - name: Deploy to EC2
       run: |
-        # Replace XX.XX.XX.XX with your EC2 IP
-        ssh -i ~/.ssh/private_key.pem ubuntu@65.0.31.64 '
+        echo "📦 Starting deployment to EC2..."
+        
+        # Create a deployment log with timestamp
+        DEPLOY_TIME=$(date '+%Y-%m-%d_%H-%M-%S')
+        
+        ssh -i ~/.ssh/private_key.pem ubuntu@65.0.31.64 "
+          echo '📝 Creating deployment directories...'
           mkdir -p ~/app
-          cd ~/app
-          echo "Deployment successful! $(date)" > deployment_log.txt
-          ls -la
-          echo "Deployment completed successfully!"
-        '
+          mkdir -p ~/app/logs
+          
+          # Create detailed deployment log
+          echo '=== Deployment Log ===' > ~/app/logs/deploy_${DEPLOY_TIME}.log
+          echo 'Deployment Time: $(date)' >> ~/app/logs/deploy_${DEPLOY_TIME}.log
+          echo 'Server Hostname: $(hostname)' >> ~/app/logs/deploy_${DEPLOY_TIME}.log
+          echo 'Disk Space:' >> ~/app/logs/deploy_${DEPLOY_TIME}.log
+          df -h >> ~/app/logs/deploy_${DEPLOY_TIME}.log
+          echo 'Memory Usage:' >> ~/app/logs/deploy_${DEPLOY_TIME}.log
+          free -m >> ~/app/logs/deploy_${DEPLOY_TIME}.log
+          echo 'Running Processes:' >> ~/app/logs/deploy_${DEPLOY_TIME}.log
+          ps aux | head -n 5 >> ~/app/logs/deploy_${DEPLOY_TIME}.log
+          
+          # Create a status file for quick check
+          echo '{
+            \"last_deployment\": \"'$(date)'\",
+            \"status\": \"success\",
+            \"commit_sha\": \"${{ github.sha }}\",
+            \"branch\": \"${{ github.ref }}\"
+          }' > ~/app/deploy-status.json
+          
+          # Create a simple HTML status page
+          echo '<!DOCTYPE html>
+          <html>
+            <head>
+              <title>Deployment Status</title>
+              <style>
+                body { font-family: Arial, sans-serif; margin: 40px; }
+                .status { padding: 20px; border-radius: 5px; }
+                .success { background: #e6ffe6; border: 1px solid #00cc00; }
+              </style>
+            </head>
+            <body>
+              <h1>Deployment Status</h1>
+              <div class=\"status success\">
+                <h2>✅ Latest Deployment</h2>
+                <p><strong>Time:</strong> '$(date)'</p>
+                <p><strong>Status:</strong> Success</p>
+                <p><strong>Commit:</strong> ${{ github.sha }}</p>
+              </div>
+            </body>
+          </html>' > ~/app/status.html
+          
+          # Keep only last 5 log files (cleanup old logs)
+          cd ~/app/logs && ls -t | tail -n +6 | xargs -I {} rm -- {}
+          
+          # Print latest deployment info
+          echo '✅ Deployment completed successfully!'
+          echo 'Latest deployment log:'
+          cat ~/app/logs/deploy_${DEPLOY_TIME}.log
+        "
+        
+        echo "✅ Deployment completed successfully!"
+
+    - name: Verify Deployment
+      run: |
+        echo "🔍 Verifying deployment..."
+        ssh -i ~/.ssh/private_key.pem ubuntu@65.0.31.64 "
+          if [ -f ~/app/deploy-status.json ]; then
+            echo '📊 Deployment Status:'
+            cat ~/app/deploy-status.json
+            echo '📁 Directory Structure:'
+            ls -la ~/app
+            echo '📝 Latest Logs:'
+            ls -la ~/app/logs
+          else
+            echo '❌ Deployment verification failed!'
+            exit 1
+          fi
+        "
+
+    - name: Deployment Summary
+      if: always()
+      run: |
+        echo "===== Deployment Summary ====="
+        echo "🕒 Time: $(date)"
+        echo "📍 Branch: ${{ github.ref }}"
+        echo "🔍 Commit: ${{ github.sha }}"
+        echo "👤 Triggered by: ${{ github.actor }}"
+        if [ $? -eq 0 ]; then
+          echo "✅ Status: Success"
+        else
+          echo "❌ Status: Failed"
+        fi
+        echo "==========================="
